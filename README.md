@@ -33,28 +33,28 @@ consumer.py
 ```
 
 Компоненты:
-- **Kafka** — брокер сообщений: входной топик `iot_in`, выходной `iot_out`.
-- **PostgreSQL** — справочник типов устройств `device_types` (источник для JOIN) и
+- **Kafka** - брокер сообщений: входной топик `iot_in`, выходной `iot_out`.
+- **PostgreSQL** - справочник типов устройств `device_types` (источник для JOIN) и
   таблица результатов `iot_aggregates` (куда пишет потребитель).
-- **PyFlink** — основная потоковая обработка.
-- **Docker Compose** — поднимает Kafka и PostgreSQL локально.
+- **PyFlink** - основная потоковая обработка.
+- **Docker Compose** - поднимает Kafka и PostgreSQL локально.
 
 ## Выбор реализации (почему так)
 
-- **Kafka** — буфер между генератором, Flink и потребителем результата.
+- **Kafka** - буфер между генератором, Flink и потребителем результата.
 - **PostgreSQL + lookup join.** Во входном событии есть только `device_type_id`, а
   название типа хранится в справочнике. Flink подключает таблицу через JDBC и делает
   lookup join (`FOR SYSTEM_TIME AS OF proc_time`), который даёт поток «только на
-  вставку» — именно такой принимает приёмник Kafka.
+  вставку» - именно такой принимает приёмник Kafka.
 - **Медиана считается в DataStream API.** Среднее можно посчитать SQL-агрегацией, но
   медиана во Flink SQL зависит от версии, поэтому окно и расчёт медианы вынесены в
-  DataStream (медиана — явным сортированием), а вокруг стоят переходы Table↔DataStream.
-- **Event time + watermark с допуском 5 секунд** — чтобы учитывать слегка запоздавшие
+  DataStream (медиана - явным сортированием), а вокруг стоят переходы Table↔DataStream.
+- **Event time + watermark с допуском 5 секунд** - чтобы учитывать слегка запоздавшие
   события. Генератор добавляет небольшой разброс времени (jitter), чтобы это проверить.
-- **Запись результата в Postgres — из потребителя (psycopg2), а не из Flink.** На Flink
+- **Запись результата в Postgres - из потребителя (psycopg2), а не из Flink.** На Flink
   2.0 используемый JDBC-коннектор не поддерживает запись (sink), поэтому persistence
   вынесена в `consumer.py`. Это также делает потребителя самостоятельным сервисом-монитором.
-- **Формат CSV** для сообщений Kafka — как в семинарах.
+- **Формат CSV** для сообщений Kafka - как в семинарах.
 
 ## Формат данных
 
@@ -70,7 +70,7 @@ consumer.py
 
 ## Справочник в PostgreSQL
 
-DDL — `sql/ddl.sql` (создаёт `device_types` и `iot_aggregates`), наполнение — `sql/dml.sql`:
+DDL - `sql/ddl.sql` (создаёт `device_types` и `iot_aggregates`), наполнение - `sql/dml.sql`:
 ```text
 1 -> Термостат
 2 -> Гигрометр
@@ -103,65 +103,64 @@ Python 3.11, PyFlink 2.0.2, Apache Kafka 3.9, PostgreSQL 16, Docker Compose,
 ## Запуск
 
 ```bash
-# 0. Поднять Kafka и PostgreSQL
-docker compose up -d        # docker-compose.yml — в базовом проекте; контейнеры общие
 
-# 1. Окружение и зависимости
+docker compose up -d
+
 conda activate flink
 pip install -r requirements.txt
 
-# 2. Топики Kafka
+
 docker exec -it kafka /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic iot_in  --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
 docker exec -it kafka /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic iot_out --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
 
-# 3. Таблицы Postgres (справочник + результаты)
+
 docker exec -i postgres psql -U postgres -d testdb < sql/ddl.sql
 docker exec -i postgres psql -U postgres -d testdb < sql/dml.sql
 ```
 
-Запуск конвейера — три терминала (в каждом: `conda activate flink && cd ~/iot_flink_project_extended`).
-**Важен порядок: Flink первым.**
+Запуск конвейера - три терминала (в каждом: `conda activate flink && cd ~/iot_flink_project_extended`).
+
 ```bash
-python flink_job_extended.py      # терминал 1 — конвейер (запускать первым)
-python generator.py --rate 5      # терминал 2 — генератор
-python consumer.py                # терминал 3 — потребитель (results.csv + Postgres + alerts.csv)
+python flink_job_extended.py
+python generator.py --rate 5
+python consumer.py
 ```
 Первый результат появляется примерно через минуту после старта генератора (окно = 1 минута).
 
 ## Проверка результата
 
 ```bash
-# 1) поток результатов в Kafka
+
 docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh --topic iot_out --bootstrap-server localhost:9092 --from-beginning
 
-# 2) результаты, сохранённые в Postgres
+
 docker exec -it postgres psql -U postgres -d testdb -c "SELECT * FROM iot_aggregates ORDER BY event_time;"
 
-# 3) файлы в папке проекта
-cat results.csv      # все окна
-cat alerts.csv       # только аномальные окна (тревоги)
+
+cat results.csv
+cat alerts.csv
 ```
 
 ## Самопроверка расчётов
 ```bash
-python metrics.py    # -> metrics: все проверки пройдены
+python metrics.py
 ```
 
 ## Что реализовано из требований
-1. Генератор показаний (тип, время, температура, влажность) → Kafka — `generator.py`
-2. DDL/DML справочника типов в Postgres — `sql/ddl.sql`, `sql/dml.sql`
-3. Источник Kafka (`src: kafka`) — `KafkaSource` (DataStream API)
-4. Источник Postgres (`src: pg`) — `CREATE TABLE … 'connector'='jdbc'` (Table API)
-5. JOIN событий со справочником — lookup join
-6. Окно: средняя температура + медиана влажности за минуту — `IotWindowFunction`
-7. Приёмник Kafka в нужном формате — `CREATE TABLE iot_out … 'connector'='kafka'`
-8. Source/sink на SQL/Table API — pg-источник и kafka-приёмник на Table API
-9. Переход DataStream ↔ Table API — `from_data_stream`
-10. Работа в event time — watermark по времени события + `TumblingEventTimeWindows`
+1. Генератор показаний (тип, время, температура, влажность) → Kafka - `generator.py`
+2. DDL/DML справочника типов в Postgres - `sql/ddl.sql`, `sql/dml.sql`
+3. Источник Kafka (`src: kafka`) - `KafkaSource` (DataStream API)
+4. Источник Postgres (`src: pg`) - `CREATE TABLE … 'connector'='jdbc'` (Table API)
+5. JOIN событий со справочником - lookup join
+6. Окно: средняя температура + медиана влажности за минуту - `IotWindowFunction`
+7. Приёмник Kafka в нужном формате - `CREATE TABLE iot_out … 'connector'='kafka'`
+8. Source/sink на SQL/Table API - pg-источник и kafka-приёмник на Table API
+9. Переход DataStream ↔ Table API - `from_data_stream`
+10. Работа в event time - watermark по времени события + `TumblingEventTimeWindows`
 
-## Дополнительно (сверх минимума)
+## Дополнительно
 - доп. метрики окна: min, max, count;
-- UDF `ComfortStatus` — статус по температуре и влажности;
+- UDF `ComfortStatus` - статус по температуре и влажности;
 - потребитель `consumer.py`: сохраняет результат в `results.csv` и в Postgres (`iot_aggregates`);
 - детект аномалий: окна с экстремальными значениями попадают в `alerts.csv` с указанием причины;
 - настройки в `config.py`, помощники в пакете `utils/`, расчётная логика в `metrics.py` с самопроверкой.
