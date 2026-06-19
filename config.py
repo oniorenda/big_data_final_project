@@ -1,0 +1,15 @@
+KAFKA_BROKER = 'localhost:9092'
+TOPIC_IN = 'iot_in'
+TOPIC_OUT = 'iot_out'
+WINDOW_SECONDS = 60
+PG_URL = 'jdbc:postgresql://localhost:5432/testdb'
+PG_USER = 'postgres'
+PG_PASSWORD = 'postgres'
+PG_REF_TABLE = 'device_types'
+PG_AGG_TABLE = 'iot_aggregates'
+DEVICE_TYPE_IDS = [1, 2, 3, 4]
+TEMP_MIN, TEMP_MAX = 15.0, 30.0
+HUM_MIN, HUM_MAX = 30.0, 80.0
+PG_HOST = 'localhost'
+PG_PORT = 5432
+PG_DB = 'testdb'
